@@ -5,6 +5,13 @@ import "RoseDB/storage"
 // DataIndexMode 数据索引的模式
 type DataIndexMode int
 
+const (
+	//key和val都存于内存中的模式，读取效率很高，适用于规模较小的场景
+	KeyValueMemMode DataIndexMode = iota
+	//只有key存于内存中的模式
+	KeyOnlyMemMode
+)
+
 //数据库配置
 type Config struct {
 	Addr                   string               `json:"addr" toml:"addr"`             //服务器地址          server address
