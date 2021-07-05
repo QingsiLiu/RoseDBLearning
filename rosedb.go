@@ -1,9 +1,12 @@
 package RoseDB
 
 import (
+	"RoseDB/index"
 	"RoseDB/storage"
+	"RoseDB/utils"
 	"errors"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -43,6 +46,24 @@ var (
 	ErrDBisReclaiming = errors.New("rosedb: can`t do reclaim and single reclaim at the same time")
 )
 
+const (
+
+	// rosedb配置文件的保存路径
+	configSaveFile = string(os.PathSeparator) + "DB.CFG"
+
+	// 保存rosedb元信息的路径
+	dbMetaSaveFile = string(os.PathSeparator) + "DB.META"
+
+	// Rosedb回收路径(一个临时目录)将在回收后被删除。
+	reclaimPath = string(os.PathSeparator) + "rosedb_reclaim"
+
+	// 分隔符的额外信息，一些命令不能包含它
+	ExtraSeparator = "\\0"
+
+	// 不同数据结构的数量(string, list, hash, set, zset).
+	DataStructureNum = 5
+)
+
 type (
 	RoseDB struct {
 		//这个结构体表示一个db实例
@@ -74,6 +95,72 @@ type (
 	//保存不同key键值的过期信息(根据数据类型以及key键值来获得deadline)
 	Expires map[DataType]map[string]int64
 )
+
+//打开一个RoseDB数据库实例
+func Open(config Config) (*RoseDB, error) {
+	//校检文件的路径是否存在，如果不存在则创建文件
+	if !utils.Exist(config.DirPath) {
+		if err := os.MkdirAll(config.DirPath, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	//从磁盘中加载文件
+	archFiles, activeFileIds, err := storage.Build(config.DirPath, config.RwMethod, config.BlockSize)
+	if err != nil {
+		return nil, err
+	}
+
+	//将活跃文件activefiles实例化为可写文件
+	activeFiles := make(ActiveFiles)
+	for dataType, fileid := range activeFileIds {
+		file, err := storage.NewDBFile(config.DirPath, fileid, config.RwMethod, config.BlockSize, dataType)
+		if err != nil {
+			return nil, err
+		}
+		activeFiles[dataType] = file
+	}
+
+	//加载数据库meta元信息，写偏移量只在activefile上
+	meta := storage.LoadMeta(config.DirPath + dbMetaSaveFile)
+	for dataType, file := range activeFiles {
+		file.Offset = meta.ActiveWriteOff[dataType]
+	}
+
+	db := &RoseDB{
+		activeFile:    activeFiles,
+		activeFileIds: activeFileIds,
+		archFiles:     archFiles,
+		config:        config,
+		strIndex:      newStrIdx(),
+		meta:          meta,
+		listIndex:     newListIdx(),
+		expires:       make(Expires),
+	}
+	for i := 0; i < DataStructureNum; i++ {
+		db.expires[uint16(i)] = make(map[string]int64)
+	}
+
+	//加载索引信息
+	if err := db.loadIdxFromFiles(); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+//为不同的数据结构构建索引
+func (db *RoseDB) buildIndex(entry *storage.Entry, idx *index.Indexer) error {
+	if db.config.IdxMode == KeyValueMemMode {
+		idx.Meta.Value = entry.Meta.Value
+		idx.Meta.ValueSize = entry.Meta.ValueSize
+	}
+
+	switch entry.GetType() {
+	case storage.String:
+		db.buildStringIndex(idx, entry)
+	}
+	return nil
+}
 
 //将entry数据写入文件中
 func (db *RoseDB) store(e *storage.Entry) error {

@@ -11,6 +11,10 @@ type StrIdx struct {
 	idxList *index.SkipList
 }
 
+func newStrIdx() *StrIdx {
+	return &StrIdx{idxList: index.NewSkipList()}
+}
+
 //设置key来保存字符串值。如果key已经保存了一个值val，那么会将被之前的val值覆盖
 func (db *RoseDB) Set(key, value []byte) error {
 	return db.doSet(key, value)
@@ -88,7 +92,10 @@ func (db *RoseDB) Get(key []byte) ([]byte, error) {
 		}
 
 		e, err := df.Read(idx.Offset)
-
+		if err != nil {
+			return nil, err
+		}
+		return e.Meta.Value, nil
 	}
 
 	return nil, ErrKeyNotExist

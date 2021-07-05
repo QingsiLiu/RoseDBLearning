@@ -9,3 +9,7 @@ type ListIdx struct {
 	mu      sync.RWMutex
 	indexes *list.List
 }
+
+func newListIdx() *ListIdx {
+	return &ListIdx{indexes: list.New()}
+}

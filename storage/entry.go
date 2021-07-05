@@ -21,6 +21,15 @@ const (
 	entryHeaderSize = 26
 )
 
+// 数据结构类型的值
+const (
+	String uint16 = iota
+	List
+	Hash
+	Set
+	ZSet
+)
+
 type (
 	//这是一个将被追加到db文件中的记录
 	Entry struct {
@@ -113,7 +122,7 @@ func (e *Entry) Encode() ([]byte, error) {
 	return buf, nil
 }
 
-//解码字节数组并返回条目
+//解码字节数组并返回一个entry数据集合
 func Decode(buf []byte) (*Entry, error) {
 	ks := binary.BigEndian.Uint32(buf[4:8])
 	vs := binary.BigEndian.Uint32(buf[8:12])

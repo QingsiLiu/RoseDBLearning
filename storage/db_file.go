@@ -4,7 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"github.com/roseduan/mmap-go"
+	"hash/crc32"
+	"io/ioutil"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -23,6 +28,9 @@ var (
 		3: "%09d.data.set",
 		4: "%09d.data.zset",
 	}
+
+	//表示db文件的后缀名
+	DBFileSuffixName = []string{"str", "list", "hash", "set", "zset"}
 )
 
 var (
@@ -96,7 +104,7 @@ func NewDBFile(path string, fileId uint32, method FileRWMethod, blockSize int64,
 //从文件中读数据，offset是起始位置
 func (df *DBFile) Read(offset int64) (e *Entry, err error) {
 	var buf []byte
-	if buf, err := df.readBuf(offset, int64(entryHeaderSize)); err != nil {
+	if buf, err = df.readBuf(offset, int64(entryHeaderSize)); err != nil {
 		return
 	}
 
@@ -104,6 +112,7 @@ func (df *DBFile) Read(offset int64) (e *Entry, err error) {
 		return
 	}
 
+	//文件偏移量从头部向后，定位到Key的位置
 	offset += entryHeaderSize
 	if e.Meta.KeySize > 0 {
 		var key []byte
@@ -113,6 +122,30 @@ func (df *DBFile) Read(offset int64) (e *Entry, err error) {
 		e.Meta.Key = key
 	}
 
+	//文件偏移量向后，定位到Val的位置
+	offset += int64(e.Meta.KeySize)
+	if e.Meta.ValueSize > 0 {
+		var value []byte
+		if value, err = df.readBuf(offset, int64(e.Meta.ValueSize)); err != nil {
+			return
+		}
+		e.Meta.Value = value
+	}
+
+	//文件偏移量向后，定位到Extra的位置
+	offset += int64(e.Meta.ValueSize)
+	if e.Meta.ExtraSize > 0 {
+		var extra []byte
+		if extra, err = df.readBuf(offset, int64(e.Meta.ExtraSize)); err != nil {
+			return
+		}
+		e.Meta.Extra = extra
+	}
+
+	checkCrc := crc32.ChecksumIEEE(e.Meta.Value)
+	if checkCrc != e.crc32 {
+		return nil, ErrInvalidCrc
+	}
 	return
 }
 
@@ -169,4 +202,79 @@ func (df *DBFile) Sync() (err error) {
 		err = df.mmap.Flush()
 	}
 	return
+}
+
+//读写后将文件关闭; sync:关闭前是否持久化数据
+func (df *DBFile) Close(sync bool) (err error) {
+	if !sync {
+		err = df.Sync()
+	}
+
+	if df.File != nil {
+		err = df.File.Close()
+	}
+	if df.mmap != nil {
+		err = df.mmap.Unmap()
+	}
+	return
+}
+
+//加载数据文件
+func Build(path string, method FileRWMethod, blockSize int64) (map[uint16]map[uint32]*DBFile, map[uint16]uint32, error) {
+	//ReadDir读取以dirname命名的目录，并返回fs列表。FileInfo用于目录的内容，按文件名排序。如果在读取目录时发生错误，ReadDir将不返回伴随错误的任何目录条目。
+	//从Go 1.16开始，os。ReadDir是一个更有效和正确的选择:它返回fs的列表。用DirEntry代替fs。FileInfo，并且在读取目录的中途出错的情况下返回部分结果
+	dir, err := ioutil.ReadDir(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	//获取数据文件的全部Id
+	fileIdsMap := make(map[uint16][]int)
+	for _, d := range dir {
+		if strings.Contains(d.Name(), ".data") {
+			splitNames := strings.Split(d.Name(), ".")
+			id, _ := strconv.Atoi(splitNames[0])
+
+			switch splitNames[2] {
+			case DBFileSuffixName[0]:
+				fileIdsMap[0] = append(fileIdsMap[0], id)
+			case DBFileSuffixName[1]:
+				fileIdsMap[1] = append(fileIdsMap[1], id)
+			case DBFileSuffixName[2]:
+				fileIdsMap[2] = append(fileIdsMap[2], id)
+			case DBFileSuffixName[3]:
+				fileIdsMap[3] = append(fileIdsMap[3], id)
+			case DBFileSuffixName[4]:
+				fileIdsMap[4] = append(fileIdsMap[4], id)
+			}
+		}
+	}
+
+	//加载全部的数据文件
+	activeFileIds := make(map[uint16]uint32)
+	archFiles := make(map[uint16]map[uint32]*DBFile)
+	var dataType uint16 = 0
+	for ; dataType < 5; dataType++ {
+		fileIds := fileIdsMap[dataType]
+		sort.Ints(fileIds)
+		files := make(map[uint32]*DBFile)
+		var activeFileId uint32 = 0
+
+		if len(fileIds) > 0 {
+			activeFileId = uint32(fileIds[len(fileIds)-1])
+
+			for i := 0; i < len(fileIds)-1; i++ {
+				id := fileIds[i]
+				file, err := NewDBFile(path, uint32(id), method, blockSize, dataType)
+				if err != nil {
+					return nil, nil, err
+				}
+				files[uint32(id)] = file
+			}
+		}
+
+		archFiles[dataType] = files
+		activeFileIds[dataType] = activeFileId
+	}
+	return archFiles, activeFileIds, nil
 }
