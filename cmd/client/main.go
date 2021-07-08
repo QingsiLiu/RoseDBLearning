@@ -13,6 +13,7 @@ import (
 //支持的指令列表
 var commandList = [][]string{
 	{"SET", "key value", "STRING"},
+	{"GET", "key", "STRING"},
 }
 
 //默认的host以及port(flag包实现命令行参数的解析),此时的host以及port都是指针类型
@@ -20,7 +21,7 @@ var host = flag.String("h", "127.0.0.1", "the rosedb server host, default 127.0.
 var port = flag.Int("p", 5200, "the port server port, default 5200")
 
 //默认的cmd地址
-const cmdHistoryPath = "/tmp/rosedb-client"
+const cmdHistoryPath = "D:/GoWorkSpace/src/RoseDB/cmd/client"
 
 func main() {
 	//解析命令行参数写入注册的flag里
@@ -136,6 +137,7 @@ func main() {
 	}
 }
 
+//解析命令行，返回命令以及参数
 func parseCommandLine(cmdLine string) (string, []interface{}) {
 	arr := strings.Split(cmdLine, " ")
 	if len(arr) == 0 {
