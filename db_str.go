@@ -1,8 +1,9 @@
 package RoseDB
 
 import (
+	"RoseDB/index"
+	"RoseDB/storage"
 	"bytes"
-	"github.com/roseduan/rosedb/index"
 	"sync"
 )
 
@@ -36,6 +37,27 @@ func (db *RoseDB) doSet(key, value []byte) (err error) {
 	db.strIndex.mu.Lock()
 	defer db.strIndex.mu.Unlock()
 
+	e := storage.NewEntryNoExtra(key, value, String, StringSet)
+	if err := db.store(e); err != nil {
+		return err
+	}
+
+	db.incrReclaimableSpace(key)
+	// clear expire time.
+	delete(db.expires[String], string(key))
+
+	// string indexes, stored in skiplist.
+	idx := &index.Indexer{
+		Meta: &storage.Meta{
+			KeySize:   uint32(len(e.Meta.Key)),
+			Key:       e.Meta.Key,
+			ValueSize: uint32(len(e.Meta.Value)),
+		},
+		FileId:    db.activeFileIds[String],
+		EntrySize: e.Size(),
+		Offset:    db.activeFile[String].Offset - int64(e.Size()),
+	}
+	db.strIndex.idxList.Put(idx.Meta.Key, idx)
 	return
 }
 
